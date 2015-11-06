@@ -12,6 +12,8 @@ import Base: ==, close, convert, done, dump, eltype, endof, flush, getindex,
              isempty, isvalid, length, names, ndims, next, parent, read,
              setindex!, show, size, sizeof, start, write
 
+using MPI
+
 include("datafile.jl")
 
 ## C types
@@ -535,12 +537,15 @@ heuristic_chunk(x) = Int[]
 
 ### High-level interface ###
 # Open or create an HDF5 file
-function h5open(filename::AbstractString, rd::Bool, wr::Bool, cr::Bool, tr::Bool, ff::Bool)
+function h5open(filename::AbstractString, rd::Bool, wr::Bool, cr::Bool, tr::Bool, ff::Bool, comm::Union{Bool,MPI.Comm}=false)
     if ff && !wr
         error("HDF5 does not support appending without writing")
     end
     pa = p_create(H5P_FILE_ACCESS)
     pa["fclose_degree"] = H5F_CLOSE_STRONG
+    if comm != false
+        h5p_set_fapl_mpio(pa.id, comm, MPI.INFO_NULL)
+    end
     if cr && (tr || !isfile(filename))
         fid = h5f_create(filename, H5F_ACC_TRUNC, H5P_DEFAULT, pa.id)
     else
@@ -553,10 +558,10 @@ function h5open(filename::AbstractString, rd::Bool, wr::Bool, cr::Bool, tr::Bool
     HDF5File(fid, filename)
 end
 
-function h5open(filename::AbstractString, mode::AbstractString="r")
-    mode == "r"  ? h5open(filename, true,  false, false, false, false) :
-    mode == "r+" ? h5open(filename, true,  true , false, false, true)  :
-    mode == "w"  ? h5open(filename, false, true , true , true,  false)  :
+function h5open(filename::AbstractString, mode::AbstractString="r"; comm::Union{Bool,MPI.Comm}=false)
+    mode == "r"  ? h5open(filename, true,  false, false, false, false, comm) :
+    mode == "r+" ? h5open(filename, true,  true , false, false, true, comm)  :
+    mode == "w"  ? h5open(filename, false, true , true , true,  false, comm)  :
 #     mode == "w+" ? h5open(filename, true,  true , true , true,  false)  :
 #     mode == "a"  ? h5open(filename, true,  true , true , true,  true)   :
     error("invalid open mode: ", mode)
@@ -1911,12 +1916,14 @@ for (jlname, h5name, outtype, argtypes, argsyms, msg) in
      (:h5p_set_libver_bounds, :H5Pset_libver_bounds, Herr, (Hid, Cint, Cint), (:fapl_id, :libver_low, :libver_high), "Error setting library version bounds"),
      (:h5p_set_local_heap_size_hint, :H5Pset_local_heap_size_hint, Herr, (Hid, Cuint), (:fapl_id, :size_hint), "Error setting local heap size hint"),
      (:h5p_set_userblock, :H5Pset_userblock, Herr, (Hid, Hsize), (:plist_id, :len), "Error setting userblock"),
+     (:h5p_set_fapl_mpio, :H5Pset_fapl_mpio, Herr, (Hid, MPI.Comm, MPI.Info), (:plist_id, :comm, :info), "Error setting file access properties for parallel io"),
      (:h5s_close, :H5Sclose, Herr, (Hid,), (:space_id,), "Error closing dataspace"),
      (:h5s_select_hyperslab, :H5Sselect_hyperslab, Herr, (Hid, Cint, Ptr{Hsize}, Ptr{Hsize}, Ptr{Hsize}, Ptr{Hsize}), (:dspace_id, :seloper, :start, :stride, :count, :block), "Error selecting hyperslab"),
      (:h5t_commit, :H5Tcommit2, Herr, (Hid, Ptr{UInt8}, Hid, Hid, Hid, Hid), (:loc_id, :name, :dtype_id, :lcpl_id, :tcpl_id, :tapl_id), "Error committing type"),
      (:h5t_close, :H5Tclose, Herr, (Hid,), (:dtype_id,), "Error closing datatype"),
      (:h5t_set_cset, :H5Tset_cset, Herr, (Hid, Cint), (:dtype_id, :cset), "Error setting character set in datatype"),
      (:h5t_set_size, :H5Tset_size, Herr, (Hid, Csize_t), (:dtype_id, :sz), "Error setting size of datatype"),
+
     )
 
     ex_dec = funcdecexpr(jlname, length(argtypes), argsyms)
